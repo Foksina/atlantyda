@@ -19,6 +19,10 @@ from django.urls import path
 
 from .views import health
 
+admin.site.site_header = 'Atlantyda'
+admin.site.site_title = 'Atlantyda'
+admin.site.index_title = 'Serie pomiarowe'
+
 urlpatterns = [
     path('api/health', health, name='health'),
     path('api/health/', health),
