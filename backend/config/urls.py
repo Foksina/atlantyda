@@ -15,7 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import include, path
 
 from .views import health
 
@@ -26,5 +26,6 @@ admin.site.index_title = 'Serie pomiarowe'
 urlpatterns = [
     path('api/health', health, name='health'),
     path('api/health/', health),
+    path('api/', include('series.urls')),
     path('admin/', admin.site.urls),
 ]
