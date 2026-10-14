@@ -490,3 +490,98 @@ class SeriesUpdateApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['name'], 'Temperatura')
+
+
+class SeriesDeleteApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient(HTTP_HOST='localhost')
+        self.admin = User.objects.create_user(username='admin', password='haslo-testowe')
+        self.token = issue_access_token(self.admin)
+        self.measured_at = datetime(2026, 1, 10, 10, 0, tzinfo=timezone.utc)
+        self.series = self.make_series('Temperatura', 'klucz-a', 28)
+        self.other = self.make_series('Ciśnienie', 'klucz-b', 180, color='#aabbcc')
+
+    def make_series(self, name, key, value, color='#1f77b4'):
+        series = Series.objects.create(
+            name=name,
+            min_value=0,
+            max_value=200,
+            color=color,
+        )
+        sensor = Sensor.objects.create(name=f'Czujnik {name}', series=series, api_key_hash=key)
+        measurement = Measurement.objects.create(
+            sensor=sensor,
+            value=value,
+            timestamp=self.measured_at,
+        )
+        series.sensor = sensor
+        series.measurement = measurement
+        return series
+
+    def delete(self, series_id=None, token=None):
+        headers = {}
+        if token is not None:
+            headers['HTTP_AUTHORIZATION'] = f'Bearer {token}'
+        target = self.series.id if series_id is None else series_id
+        return self.client.delete(f'/api/series/{target}', **headers)
+
+    def test_admin_deletes_series_and_related_records(self):
+        response = self.delete(token=self.token)
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.content, b'')
+        self.assertFalse(Series.objects.filter(pk=self.series.id).exists())
+        self.assertFalse(Sensor.objects.filter(pk=self.series.sensor.id).exists())
+        self.assertFalse(Measurement.objects.filter(pk=self.series.measurement.id).exists())
+        detail = self.client.get(f'/api/series/{self.series.id}')
+        self.assertEqual(detail.status_code, 404)
+
+    def test_other_series_stays_intact(self):
+        response = self.delete(token=self.token)
+
+        self.assertEqual(response.status_code, 204)
+        self.other.refresh_from_db()
+        self.assertEqual(self.other.name, 'Ciśnienie')
+        self.assertTrue(Sensor.objects.filter(pk=self.other.sensor.id).exists())
+        self.assertEqual(Measurement.objects.get(pk=self.other.measurement.id).value, 180)
+        listed = self.client.get('/api/series')
+        self.assertEqual([item['id'] for item in listed.json()], [self.other.id])
+
+    def test_missing_series_returns_404(self):
+        response = self.delete(series_id=999999999, token=self.token)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 404)
+        self.assertTrue(response.json()['title'])
+        self.assertTrue(Series.objects.filter(pk=self.series.id).exists())
+
+    def test_non_numeric_id_returns_404(self):
+        response = self.delete(series_id='brak', token=self.token)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['status'], 404)
+        self.assertEqual(Series.objects.count(), 2)
+
+    def test_second_delete_returns_404(self):
+        first = self.delete(token=self.token)
+        second = self.delete(token=self.token)
+
+        self.assertEqual(first.status_code, 204)
+        self.assertEqual(second.status_code, 404)
+
+    def test_missing_token_returns_401(self):
+        response = self.delete()
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 401)
+        self.assertTrue(Series.objects.filter(pk=self.series.id).exists())
+        self.assertTrue(Measurement.objects.filter(pk=self.series.measurement.id).exists())
+
+    def test_forged_token_returns_401(self):
+        response = self.delete(token='eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.')
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(Series.objects.count(), 2)
+        self.assertEqual(Measurement.objects.count(), 2)

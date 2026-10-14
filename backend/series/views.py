@@ -86,7 +86,7 @@ class AdministratorWriteMixin:
     authentication_classes = [BearerAuthentication]
 
     def get_permissions(self):
-        if self.request.method in ('POST', 'PUT'):
+        if self.request.method in ('POST', 'PUT', 'DELETE'):
             return [IsAuthenticated()]
         return [AllowAny()]
 
@@ -195,3 +195,24 @@ class SeriesDetailView(AdministratorWriteMixin, APIView):
                 instance=request.path,
             )
         return Response(SeriesSerializer(updated).data)
+
+    def delete(self, request, series_id):
+        series = find_series(series_id)
+        if series is None:
+            return problem_response(
+                404,
+                'Nie znaleziono',
+                detail='Seria pomiarowa nie istnieje.',
+                instance=request.path,
+            )
+        with transaction.atomic():
+            locked = Series.objects.select_for_update().filter(pk=series.pk).first()
+            if locked is None:
+                return problem_response(
+                    404,
+                    'Nie znaleziono',
+                    detail='Seria pomiarowa nie istnieje.',
+                    instance=request.path,
+                )
+            locked.delete()
+        return Response(status=204)
