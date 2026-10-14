@@ -1,4 +1,5 @@
-from django.db import DataError, IntegrityError
+from django.db import DataError, IntegrityError, transaction
+from django.db.models import Q
 from django.urls import reverse
 from rest_framework.exceptions import NotAuthenticated, ParseError, UnsupportedMediaType
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -6,6 +7,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.authentication import BearerAuthentication
+from measurements.models import Measurement
+from sensors.models import Sensor
 
 from .models import Series
 from .serializers import SeriesSerializer
@@ -48,6 +51,24 @@ def validation_status(serializer_errors):
     return 422
 
 
+def invalid_series_response(serializer, request):
+    status_code = validation_status(serializer.errors)
+    title = 'Niepoprawne żądanie' if status_code == 400 else 'Nie można przetworzyć danych'
+    return problem_response(
+        status_code,
+        title,
+        detail='Dane serii pomiarowej są niepoprawne.',
+        instance=request.path,
+        errors=field_errors(serializer.errors),
+    )
+
+
+def measurements_conflict(series, min_value, max_value):
+    return Measurement.objects.filter(sensor__series=series).filter(
+        Q(value__lt=min_value) | Q(value__gt=max_value)
+    ).exists()
+
+
 def find_series(series_id):
     try:
         pk = int(series_id)
@@ -61,13 +82,11 @@ def find_series(series_id):
         return None
 
 
-class SeriesListView(APIView):
-    """Lista serii pomiarowych oraz tworzenie serii przez administratora."""
-
+class AdministratorWriteMixin:
     authentication_classes = [BearerAuthentication]
 
     def get_permissions(self):
-        if self.request.method == 'POST':
+        if self.request.method in ('POST', 'PUT'):
             return [IsAuthenticated()]
         return [AllowAny()]
 
@@ -95,6 +114,10 @@ class SeriesListView(APIView):
             )
         return super().handle_exception(exc)
 
+
+class SeriesListView(AdministratorWriteMixin, APIView):
+    """Lista serii pomiarowych oraz tworzenie serii przez administratora."""
+
     def get(self, request):
         series = Series.objects.order_by('id')
         return Response(SeriesSerializer(series, many=True).data)
@@ -102,15 +125,7 @@ class SeriesListView(APIView):
     def post(self, request):
         serializer = SeriesSerializer(data=request.data)
         if not serializer.is_valid():
-            status_code = validation_status(serializer.errors)
-            title = 'Niepoprawne żądanie' if status_code == 400 else 'Nie można przetworzyć danych'
-            return problem_response(
-                status_code,
-                title,
-                detail='Dane serii pomiarowej są niepoprawne.',
-                instance=request.path,
-                errors=field_errors(serializer.errors),
-            )
+            return invalid_series_response(serializer, request)
         try:
             series = serializer.save()
         except IntegrityError:
@@ -127,11 +142,8 @@ class SeriesListView(APIView):
         )
 
 
-class SeriesDetailView(APIView):
-    """Publiczny odczyt jednej serii pomiarowej."""
-
-    permission_classes = [AllowAny]
-    authentication_classes = []
+class SeriesDetailView(AdministratorWriteMixin, APIView):
+    """Odczyt i aktualizacja jednej serii pomiarowej."""
 
     def get(self, request, series_id):
         series = find_series(series_id)
@@ -143,3 +155,43 @@ class SeriesDetailView(APIView):
                 instance=request.path,
             )
         return Response(SeriesSerializer(series).data)
+
+    def put(self, request, series_id):
+        series = find_series(series_id)
+        if series is None:
+            return problem_response(
+                404,
+                'Nie znaleziono',
+                detail='Seria pomiarowa nie istnieje.',
+                instance=request.path,
+            )
+        serializer = SeriesSerializer(series, data=request.data)
+        if not serializer.is_valid():
+            return invalid_series_response(serializer, request)
+        min_value = serializer.validated_data['min_value']
+        max_value = serializer.validated_data['max_value']
+        try:
+            with transaction.atomic():
+                locked = Series.objects.select_for_update().get(pk=series.pk)
+                list(
+                    Sensor.objects.select_for_update()
+                    .filter(series=locked)
+                    .order_by('pk')
+                )
+                if measurements_conflict(locked, min_value, max_value):
+                    return problem_response(
+                        409,
+                        'Konflikt',
+                        detail='Nowy zakres nie obejmuje istniejących pomiarów.',
+                        instance=request.path,
+                    )
+                serializer.instance = locked
+                updated = serializer.save()
+        except IntegrityError:
+            return problem_response(
+                422,
+                'Nie można przetworzyć danych',
+                detail='Wartość minimalna musi być mniejsza od maksymalnej.',
+                instance=request.path,
+            )
+        return Response(SeriesSerializer(updated).data)

@@ -52,3 +52,8 @@ class SeriesSerializer(serializers.ModelSerializer):
                 }
             )
         return attrs
+
+    def update(self, instance, validated_data):
+        validated_data.setdefault('icon', None)
+        validated_data.setdefault('unit', None)
+        return super().update(instance, validated_data)

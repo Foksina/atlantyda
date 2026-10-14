@@ -1,9 +1,13 @@
+from datetime import datetime, timezone
+
 from django.test import SimpleTestCase, TestCase
 from django.urls import resolve, reverse
 from rest_framework.test import APIClient
 
 from accounts.authentication import issue_access_token
 from accounts.models import User
+from measurements.models import Measurement
+from sensors.models import Sensor
 from series.models import Series
 from series.serializers import SeriesSerializer
 
@@ -283,3 +287,206 @@ class SeriesCreateApiTests(TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(Series.objects.count(), 0)
+
+
+class SeriesUpdateApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient(HTTP_HOST='localhost')
+        self.admin = User.objects.create_user(username='admin', password='haslo-testowe')
+        self.token = issue_access_token(self.admin)
+        self.series = Series.objects.create(
+            name='Temperatura',
+            min_value=10,
+            max_value=30,
+            color='#1f77b4',
+            icon='thermometer',
+            unit='°C',
+        )
+        self.sensor = Sensor.objects.create(
+            name='Czujnik A',
+            series=self.series,
+            api_key_hash='klucz-a',
+        )
+        self.measured_at = datetime(2026, 1, 10, 10, 0, tzinfo=timezone.utc)
+        self.measurement = Measurement.objects.create(
+            sensor=self.sensor,
+            value=28,
+            timestamp=self.measured_at,
+        )
+
+    def payload(self, **overrides):
+        data = {
+            'name': 'Temperatura',
+            'minValue': 10,
+            'maxValue': 30,
+            'color': '#1f77b4',
+            'icon': 'thermometer',
+            'unit': '°C',
+        }
+        data.update(overrides)
+        return data
+
+    def put(self, data, series_id=None, token=None):
+        headers = {}
+        if token is not None:
+            headers['HTTP_AUTHORIZATION'] = f'Bearer {token}'
+        target = self.series.id if series_id is None else series_id
+        return self.client.put(f'/api/series/{target}', data, format='json', **headers)
+
+    def assert_series_unchanged(self):
+        self.series.refresh_from_db()
+        self.assertEqual(self.series.name, 'Temperatura')
+        self.assertEqual(self.series.min_value, 10)
+        self.assertEqual(self.series.max_value, 30)
+        self.assertEqual(self.series.color, '#1f77b4')
+        self.assertEqual(self.series.icon, 'thermometer')
+        self.assertEqual(self.series.unit, '°C')
+
+    def assert_measurement_unchanged(self):
+        self.measurement.refresh_from_db()
+        self.assertEqual(self.measurement.value, 28)
+        self.assertEqual(self.measurement.timestamp, self.measured_at)
+        self.assertEqual(Measurement.objects.count(), 1)
+        self.assertEqual(Sensor.objects.count(), 1)
+
+    def test_admin_updates_series(self):
+        response = self.put(
+            self.payload(name='Temperatura wody', color='#ff7f0e', icon='wave', unit='K'),
+            token=self.token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                'id': self.series.id,
+                'name': 'Temperatura wody',
+                'minValue': 10,
+                'maxValue': 30,
+                'color': '#ff7f0e',
+                'icon': 'wave',
+                'unit': 'K',
+            },
+        )
+        detail = self.client.get(f'/api/series/{self.series.id}')
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json(), response.json())
+        self.assert_measurement_unchanged()
+
+    def test_update_without_optional_fields_clears_them(self):
+        response = self.put(
+            {
+                'name': 'Temperatura',
+                'minValue': 10,
+                'maxValue': 30,
+                'color': '#1f77b4',
+            },
+            token=self.token,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['icon'])
+        self.assertIsNone(response.json()['unit'])
+
+    def test_range_update_keeps_fitting_measurements(self):
+        response = self.put(self.payload(minValue=20, maxValue=28), token=self.token)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['minValue'], 20)
+        self.assertEqual(response.json()['maxValue'], 28)
+        self.assert_measurement_unchanged()
+
+    def test_missing_series_returns_404(self):
+        response = self.put(self.payload(), series_id=999999999, token=self.token)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 404)
+        self.assertTrue(response.json()['title'])
+        self.assert_series_unchanged()
+
+    def test_non_numeric_id_returns_404(self):
+        response = self.put(self.payload(), series_id='brak', token=self.token)
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['status'], 404)
+
+    def test_missing_required_field_returns_400(self):
+        payload = self.payload()
+        del payload['name']
+
+        response = self.put(payload, token=self.token)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['status'], 400)
+        self.assertIn('name', [item['field'] for item in response.json()['errors']])
+        self.assert_series_unchanged()
+
+    def test_wrong_type_returns_400(self):
+        response = self.put(self.payload(minValue='ciepło'), token=self.token)
+
+        self.assertEqual(response.status_code, 400)
+        self.assert_series_unchanged()
+        self.assert_measurement_unchanged()
+
+    def test_invalid_range_returns_422(self):
+        response = self.put(self.payload(minValue=30, maxValue=10), token=self.token)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()['status'], 422)
+        self.assert_series_unchanged()
+
+    def test_measurement_above_new_maximum_returns_409(self):
+        response = self.put(self.payload(minValue=10, maxValue=25), token=self.token)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 409)
+        self.assertTrue(response.json()['title'])
+        self.assert_series_unchanged()
+        self.assert_measurement_unchanged()
+
+    def test_measurement_below_new_minimum_returns_409(self):
+        response = self.put(self.payload(minValue=29, maxValue=40), token=self.token)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['status'], 409)
+        self.assert_series_unchanged()
+        self.assert_measurement_unchanged()
+
+    def test_other_series_measurement_does_not_cause_conflict(self):
+        other = Series.objects.create(
+            name='Ciśnienie',
+            min_value=0,
+            max_value=200,
+            color='#aabbcc',
+        )
+        other_sensor = Sensor.objects.create(
+            name='Czujnik B',
+            series=other,
+            api_key_hash='klucz-b',
+        )
+        Measurement.objects.create(
+            sensor=other_sensor,
+            value=180,
+            timestamp=self.measured_at,
+        )
+
+        response = self.put(self.payload(minValue=20, maxValue=28), token=self.token)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Measurement.objects.get(pk=self.measurement.pk).value, 28)
+        self.assertEqual(Measurement.objects.get(sensor=other_sensor).value, 180)
+
+    def test_missing_token_returns_401(self):
+        response = self.put(self.payload(name='Inna nazwa'))
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()['status'], 401)
+        self.assert_series_unchanged()
+
+    def test_get_stays_public_after_update_rules(self):
+        response = self.client.get(f'/api/series/{self.series.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['name'], 'Temperatura')
