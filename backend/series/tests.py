@@ -2,6 +2,8 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import resolve, reverse
 from rest_framework.test import APIClient
 
+from accounts.authentication import issue_access_token
+from accounts.models import User
 from series.models import Series
 from series.serializers import SeriesSerializer
 
@@ -114,3 +116,170 @@ class SeriesReadApiTests(TestCase):
         response = self.client.get('/api/series', HTTP_ACCEPT='application/xml')
 
         self.assertEqual(response.status_code, 406)
+
+    def test_list_stays_public_with_invalid_token(self):
+        response = self.client.get('/api/series', HTTP_AUTHORIZATION='Bearer nie-token')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 2)
+
+
+class SeriesCreateApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient(HTTP_HOST='localhost')
+        self.admin = User.objects.create_user(username='admin', password='haslo-testowe')
+        self.token = issue_access_token(self.admin)
+        self.valid = {
+            'name': 'Zasolenie',
+            'minValue': 30,
+            'maxValue': 40,
+            'color': '#1F77B4',
+            'icon': 'drop',
+            'unit': 'PSU',
+        }
+
+    def post(self, data, token=None, **extra):
+        headers = {}
+        if token is not None:
+            headers['HTTP_AUTHORIZATION'] = f'Bearer {token}'
+        return self.client.post('/api/series', data, format='json', **headers, **extra)
+
+    def test_admin_creates_series(self):
+        response = self.post(self.valid, token=self.token)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn('application/json', response['Content-Type'])
+        body = response.json()
+        self.assertEqual(response['Location'], f'/api/series/{body["id"]}')
+        self.assertEqual(body['name'], 'Zasolenie')
+        self.assertEqual(body['minValue'], 30)
+        self.assertEqual(body['maxValue'], 40)
+        self.assertEqual(body['color'], '#1F77B4')
+        self.assertEqual(body['icon'], 'drop')
+        self.assertEqual(body['unit'], 'PSU')
+        detail = self.client.get(response['Location'])
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json(), body)
+
+    def test_optional_fields_may_be_omitted(self):
+        payload = {
+            'name': 'Prąd',
+            'minValue': -2.5,
+            'maxValue': 2.5,
+            'color': '#abcdef',
+        }
+
+        response = self.post(payload, token=self.token)
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIsNone(response.json()['icon'])
+        self.assertIsNone(response.json()['unit'])
+
+    def test_same_name_can_be_created_twice(self):
+        first = self.post(self.valid, token=self.token)
+        second = self.post(self.valid, token=self.token)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertNotEqual(first.json()['id'], second.json()['id'])
+
+    def test_missing_required_field_returns_400(self):
+        payload = {'minValue': 0, 'maxValue': 1, 'color': '#000000'}
+
+        response = self.post(payload, token=self.token)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        body = response.json()
+        self.assertEqual(body['status'], 400)
+        self.assertTrue(body['title'])
+        self.assertIn('name', [item['field'] for item in body['errors']])
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_wrong_types_return_400(self):
+        payload = {**self.valid, 'minValue': 'dużo', 'color': 112}
+
+        response = self.post(payload, token=self.token)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['status'], 400)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_boolean_value_is_rejected(self):
+        response = self.post({**self.valid, 'maxValue': True}, token=self.token)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_invalid_json_returns_400(self):
+        response = self.client.post(
+            '/api/series',
+            '{"name":',
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f'Bearer {self.token}',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['status'], 400)
+
+    def test_equal_range_returns_422(self):
+        response = self.post({**self.valid, 'minValue': 10, 'maxValue': 10}, token=self.token)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 422)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_reversed_range_returns_422(self):
+        response = self.post({**self.valid, 'minValue': 8, 'maxValue': 3}, token=self.token)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_invalid_color_returns_422(self):
+        response = self.post({**self.valid, 'color': 'niebieski'}, token=self.token)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('color', [item['field'] for item in response.json()['errors']])
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_too_long_unit_returns_422(self):
+        response = self.post({**self.valid, 'unit': 'x' * 21}, token=self.token)
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_plain_text_body_returns_415(self):
+        response = self.client.post(
+            '/api/series',
+            'name=Zasolenie',
+            content_type='text/plain',
+            HTTP_AUTHORIZATION=f'Bearer {self.token}',
+        )
+
+        self.assertEqual(response.status_code, 415)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 415)
+
+    def test_missing_token_returns_401(self):
+        response = self.post(self.valid)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        self.assertEqual(response.json()['status'], 401)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_forged_token_returns_401(self):
+        response = self.post(self.valid, token='eyJhbGciOiJub25lIn0.eyJzdWIiOiJhZG1pbiJ9.')
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(Series.objects.count(), 0)
+
+    def test_inactive_administrator_returns_401(self):
+        self.admin.is_active = False
+        self.admin.save(update_fields=['is_active'])
+
+        response = self.post(self.valid, token=self.token)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(Series.objects.count(), 0)
