@@ -1,4 +1,4 @@
-from django.db import DataError, IntegrityError
+from django.db import DataError, IntegrityError, transaction
 from django.db.models import Max
 from django.urls import reverse
 from rest_framework.exceptions import NotAuthenticated, ParseError, UnsupportedMediaType
@@ -63,9 +63,23 @@ def invalid_sensor_response(serializer, request):
 
 
 def sensor_queryset():
-    return Sensor.objects.annotate(
+    return Sensor.objects.filter(is_active=True).annotate(
         last_measurement_at=Max('measurements__timestamp'),
     ).order_by('id')
+
+
+def retire_sensor(sensor):
+    """Unieważnia klucz. Rekord zostaje, bo wyniki pomiarów mają przetrwać."""
+    for _ in range(5):
+        sensor.is_active = False
+        sensor.api_key_hash = hash_api_key(generate_api_key())
+        try:
+            with transaction.atomic():
+                sensor.save(update_fields=['is_active', 'api_key_hash'])
+            return True
+        except IntegrityError:
+            sensor.refresh_from_db()
+    return False
 
 
 def find_sensor(sensor_id):
@@ -152,7 +166,7 @@ class SensorListView(AdministratorSensorMixin, APIView):
 
 
 class SensorDetailView(AdministratorSensorMixin, APIView):
-    """Odczyt jednego czujnika."""
+    """Odczyt i wyrejestrowanie jednego czujnika."""
 
     def get(self, request, sensor_id):
         sensor = find_sensor(sensor_id)
@@ -164,3 +178,34 @@ class SensorDetailView(AdministratorSensorMixin, APIView):
                 instance=request.path,
             )
         return Response(SensorSerializer(sensor).data)
+
+    def delete(self, request, sensor_id):
+        sensor = find_sensor(sensor_id)
+        if sensor is None:
+            return problem_response(
+                404,
+                'Nie znaleziono',
+                detail='Czujnik nie istnieje.',
+                instance=request.path,
+            )
+        with transaction.atomic():
+            locked = (
+                Sensor.objects.select_for_update()
+                .filter(pk=sensor.pk, is_active=True)
+                .first()
+            )
+            if locked is None:
+                return problem_response(
+                    404,
+                    'Nie znaleziono',
+                    detail='Czujnik nie istnieje.',
+                    instance=request.path,
+                )
+            if not retire_sensor(locked):
+                return problem_response(
+                    422,
+                    'Nie można przetworzyć danych',
+                    detail='Nie udało się wyrejestrować czujnika.',
+                    instance=request.path,
+                )
+        return Response(status=204)
