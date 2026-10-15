@@ -27,5 +27,6 @@ urlpatterns = [
     path('api/health', health, name='health'),
     path('api/health/', health),
     path('api/', include('series.urls')),
+    path('api/', include('sensors.urls')),
     path('admin/', admin.site.urls),
 ]
