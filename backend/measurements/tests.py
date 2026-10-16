@@ -296,3 +296,280 @@ class MeasurementCreateApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()[0]['name'], 'Temperatura')
+
+
+class MeasurementReadApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient(HTTP_HOST='localhost')
+        self.series = Series.objects.create(
+            name='Temperatura',
+            min_value=0,
+            max_value=40,
+            color='#1f77b4',
+            unit='°C',
+        )
+        self.other_series = Series.objects.create(
+            name='Ciśnienie',
+            min_value=0,
+            max_value=200,
+            color='#aabbcc',
+        )
+        self.api_key = 'a' * 40
+        self.sensor = Sensor.objects.create(
+            name='Czujnik A',
+            series=self.series,
+            api_key_hash=hash_api_key(self.api_key),
+        )
+        self.other = Sensor.objects.create(
+            name='Czujnik B',
+            series=self.other_series,
+            api_key_hash=hash_api_key('b' * 40),
+        )
+        self.t0 = datetime(2026, 1, 10, 10, 0, tzinfo=datetime_timezone.utc)
+        self.t1 = datetime(2026, 1, 10, 11, 0, tzinfo=datetime_timezone.utc)
+        self.t2 = datetime(2026, 1, 10, 12, 0, tzinfo=datetime_timezone.utc)
+        self.first = self.add(self.sensor, 21.5, self.t1)
+        self.early = self.add(self.sensor, 30, self.t0)
+        self.late = self.add(self.sensor, 10, self.t2)
+        self.other_measurement = self.add(self.other, 180, self.t0)
+
+    def add(self, sensor, value, timestamp):
+        return Measurement.objects.create(sensor=sensor, value=value, timestamp=timestamp)
+
+    def instant(self, value):
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+    def test_list_returns_measurements_without_secrets(self):
+        response = self.client.get('/api/measurements')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('application/json', response['Content-Type'])
+        body = response.json()
+        self.assertEqual(
+            [item['id'] for item in body],
+            [self.early.id, self.other_measurement.id, self.first.id, self.late.id],
+        )
+        item = body[2]
+        self.assertEqual(set(item), {'id', 'seriesId', 'sensorId', 'value', 'timestamp'})
+        self.assertEqual(item['value'], 21.5)
+        self.assertEqual(item['seriesId'], self.series.id)
+        self.assertEqual(item['sensorId'], self.sensor.id)
+        self.assertEqual(self.instant(item['timestamp']), self.t1)
+        self.assertNotIn('unit', item)
+        self.assertNotIn('name', item)
+        text = response.content.decode()
+        self.assertNotIn(self.api_key, text)
+        self.assertNotIn(self.sensor.api_key_hash, text)
+        self.assertEqual(Measurement.objects.count(), 4)
+
+    def test_empty_list(self):
+        Measurement.objects.all().delete()
+
+        response = self.client.get('/api/measurements')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_series_filter_keeps_one_series(self):
+        response = self.client.get('/api/measurements', {'series': str(self.series.id)})
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual([item['id'] for item in body], [self.early.id, self.first.id, self.late.id])
+        self.assertTrue(all(item['seriesId'] == self.series.id for item in body))
+
+    def test_series_filter_accepts_several_ids(self):
+        response = self.client.get(
+            '/api/measurements',
+            {'series': f'{self.series.id},{self.other_series.id}'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()), 4)
+
+    def test_unknown_series_returns_empty_list(self):
+        response = self.client.get('/api/measurements', {'series': '999999999'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_from_and_to_are_inclusive(self):
+        response = self.client.get(
+            '/api/measurements',
+            {
+                'series': str(self.series.id),
+                'from': '2026-01-10T10:00:00Z',
+                'to': '2026-01-10T11:00:00Z',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.json()], [self.early.id, self.first.id])
+
+    def test_timestamp_outside_range_is_excluded(self):
+        response = self.client.get(
+            '/api/measurements',
+            {
+                'series': str(self.series.id),
+                'from': '2026-01-10T10:00:01Z',
+                'to': '2026-01-10T10:59:59Z',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+
+    def test_equal_bounds_return_boundary_measurement(self):
+        response = self.client.get(
+            '/api/measurements',
+            {
+                'from': '2026-01-10T12:00:00Z',
+                'to': '2026-01-10T12:00:00Z',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['id'] for item in response.json()], [self.late.id])
+
+    def test_default_sort_is_ascending_and_descending_sort_reverses_it(self):
+        ascending = self.client.get('/api/measurements', {'series': str(self.series.id)})
+        descending = self.client.get(
+            '/api/measurements',
+            {'series': str(self.series.id), 'sort': '-timestamp'},
+        )
+
+        self.assertEqual(
+            [item['id'] for item in ascending.json()],
+            [self.early.id, self.first.id, self.late.id],
+        )
+        self.assertEqual(
+            [item['id'] for item in descending.json()],
+            [self.late.id, self.first.id, self.early.id],
+        )
+
+    def test_explicit_ascending_sort(self):
+        response = self.client.get(
+            '/api/measurements',
+            {'series': str(self.series.id), 'sort': 'timestamp'},
+        )
+
+        self.assertEqual(
+            [item['id'] for item in response.json()],
+            [self.early.id, self.first.id, self.late.id],
+        )
+
+    def test_limit_applies_after_filters(self):
+        response = self.client.get(
+            '/api/measurements',
+            {
+                'series': f'{self.series.id},{self.other_series.id}',
+                'from': '2026-01-10T10:00:00Z',
+                'to': '2026-01-10T12:00:00Z',
+                'sort': '-timestamp',
+                'limit': '2',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item['id'] for item in response.json()],
+            [self.late.id, self.first.id],
+        )
+
+    def test_default_limit_returns_existing_rows(self):
+        response = self.client.get('/api/measurements')
+
+        self.assertEqual(len(response.json()), 4)
+
+    def test_invalid_query_parameters_return_400(self):
+        cases = (
+            {'from': 'nie-data'},
+            {'to': 'wczoraj'},
+            {'sort': 'foo'},
+            {'limit': '0'},
+            {'limit': '10001'},
+            {'limit': 'abc'},
+            {'series': 'abc'},
+            {'series': f'{self.series.id},x'},
+        )
+        for params in cases:
+            with self.subTest(params=params):
+                response = self.client.get('/api/measurements', params)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('application/problem+json', response['Content-Type'])
+                body = response.json()
+                self.assertEqual(body['type'], 'about:blank')
+                self.assertEqual(body['title'], 'Niepoprawne żądanie')
+                self.assertEqual(body['status'], 400)
+                self.assertTrue(body['errors'])
+                self.assertNotIn(b'Traceback', response.content)
+        self.assertEqual(Measurement.objects.count(), 4)
+
+    def test_detail_returns_one_measurement(self):
+        response = self.client.get(f'/api/measurements/{self.first.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('application/json', response['Content-Type'])
+        body = response.json()
+        self.assertEqual(body['id'], self.first.id)
+        self.assertEqual(body['value'], 21.5)
+        self.assertEqual(body['seriesId'], self.series.id)
+        self.assertEqual(body['sensorId'], self.sensor.id)
+        self.assertEqual(self.instant(body['timestamp']), self.t1)
+        self.assertNotIn(self.api_key, response.content.decode())
+        self.assertNotIn(self.sensor.api_key_hash, response.content.decode())
+
+    def test_missing_measurement_returns_problem_details(self):
+        response = self.client.get('/api/measurements/999999999')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertIn('application/problem+json', response['Content-Type'])
+        body = response.json()
+        self.assertEqual(body['type'], 'about:blank')
+        self.assertEqual(body['title'], 'Nie znaleziono')
+        self.assertEqual(body['status'], 404)
+
+    def test_non_numeric_id_returns_404(self):
+        response = self.client.get('/api/measurements/brak')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()['status'], 404)
+
+    def test_read_stays_public_for_inactive_sensor(self):
+        self.sensor.is_active = False
+        self.sensor.save(update_fields=['is_active'])
+
+        listed = self.client.get('/api/measurements', {'series': str(self.series.id)})
+        detail = self.client.get(f'/api/measurements/{self.first.id}')
+
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(len(listed.json()), 3)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()['value'], 21.5)
+
+    def test_write_methods_do_not_change_measurement(self):
+        for method in ('put', 'patch', 'delete'):
+            with self.subTest(method=method):
+                response = getattr(self.client, method)(
+                    f'/api/measurements/{self.first.id}',
+                    {'value': 1, 'timestamp': '2026-01-10T10:00:00Z'},
+                    format='json',
+                )
+                self.assertIn(response.status_code, (404, 405))
+        self.first.refresh_from_db()
+        self.assertEqual(self.first.value, 21.5)
+
+    def test_series_and_sensor_reads_still_work(self):
+        admin = User.objects.create_user(username='admin', password='haslo-testowe')
+        token = issue_access_token(admin)
+
+        series = self.client.get('/api/series')
+        sensors = self.client.get('/api/sensors', HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        self.assertEqual(series.status_code, 200)
+        self.assertEqual(series.json()[0]['name'], 'Temperatura')
+        self.assertEqual(sensors.status_code, 200)
+        self.assertEqual(sensors.json()[0]['name'], 'Czujnik A')
+        self.assertIsNotNone(sensors.json()[0]['lastMeasurementAt'])
+        self.assertNotIn(self.api_key, series.content.decode())
+        self.assertNotIn(self.sensor.api_key_hash, sensors.content.decode())

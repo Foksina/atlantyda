@@ -1,7 +1,8 @@
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import DataError, transaction
 from django.utils import timezone
+from rest_framework import serializers
 from rest_framework.exceptions import ParseError, UnsupportedMediaType
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -16,6 +17,9 @@ from .serializers import MeasurementInputSerializer
 
 SYNTAX_ERROR_CODES = {'required', 'invalid', 'null', 'blank'}
 FUTURE_LIMIT = timedelta(minutes=5)
+DEFAULT_LIMIT = 1000
+MAX_LIMIT = 10000
+MAX_SERIES_ID = 2**63 - 1
 
 
 def problem_response(status_code, title, *, detail=None, instance=None, errors=None):
@@ -74,8 +78,117 @@ def unauthorized(request):
     )
 
 
-class MeasurementCreateView(APIView):
-    """Zapis wyniku przesłanego kluczem API czujnika."""
+def measurement_data(measurement):
+    return {
+        'id': measurement.id,
+        'seriesId': measurement.sensor.series_id,
+        'sensorId': measurement.sensor_id,
+        'value': measurement.value,
+        'timestamp': measurement.timestamp,
+    }
+
+
+def measurement_queryset():
+    return Measurement.objects.select_related('sensor')
+
+
+def parse_series_ids(raw):
+    if raw is None:
+        return None
+    parts = [part.strip() for part in raw.split(',')]
+    if not parts or any(not part.isdigit() for part in parts):
+        raise ValueError
+    parsed = []
+    for part in parts:
+        value = int(part)
+        if value < 1 or value > MAX_SERIES_ID:
+            raise ValueError
+        parsed.append(value)
+    return parsed
+
+
+def parse_instant(raw):
+    if raw is None:
+        return None
+    try:
+        return serializers.DateTimeField().to_internal_value(raw)
+    except serializers.ValidationError as exc:
+        raise ValueError from exc
+
+
+def parse_limit(raw):
+    if raw is None:
+        return DEFAULT_LIMIT
+    if not raw.isdigit():
+        raise ValueError
+    value = int(raw)
+    if value < 1 or value > MAX_LIMIT:
+        raise ValueError
+    return value
+
+
+def parse_sort(raw):
+    if raw is None or raw == 'timestamp':
+        return ('timestamp', 'id')
+    if raw == '-timestamp':
+        return ('-timestamp', '-id')
+    raise ValueError
+
+
+def filtered_measurements(params):
+    errors = []
+    try:
+        series_ids = parse_series_ids(params.get('series'))
+    except ValueError:
+        errors.append({'field': 'series', 'message': 'Identyfikatory serii są niepoprawne.'})
+        series_ids = None
+    try:
+        start = parse_instant(params.get('from'))
+    except ValueError:
+        errors.append({'field': 'from', 'message': 'Parametr from musi być datą i godziną.'})
+        start = None
+    try:
+        end = parse_instant(params.get('to'))
+    except ValueError:
+        errors.append({'field': 'to', 'message': 'Parametr to musi być datą i godziną.'})
+        end = None
+    try:
+        ordering = parse_sort(params.get('sort'))
+    except ValueError:
+        errors.append({'field': 'sort', 'message': 'Dozwolone wartości to timestamp i -timestamp.'})
+        ordering = None
+    try:
+        limit = parse_limit(params.get('limit'))
+    except ValueError:
+        errors.append({'field': 'limit', 'message': 'Limit musi być liczbą całkowitą od 1 do 10000.'})
+        limit = None
+    if errors:
+        return errors, None
+    queryset = measurement_queryset()
+    if series_ids is not None:
+        queryset = queryset.filter(sensor__series_id__in=series_ids)
+    if start is not None:
+        queryset = queryset.filter(timestamp__gte=start)
+    if end is not None:
+        queryset = queryset.filter(timestamp__lte=end)
+    return None, queryset.order_by(*ordering)[:limit]
+
+
+def find_measurement(measurement_id):
+    try:
+        pk = int(measurement_id)
+    except (TypeError, ValueError):
+        return None
+    if pk < 1 or pk > MAX_SERIES_ID:
+        return None
+    try:
+        return measurement_queryset().filter(pk=pk).first()
+    except (DataError, OverflowError):
+        return None
+
+
+class MeasurementListView(APIView):
+    """Odczyt wyników oraz zapis wyniku przesłanego kluczem API czujnika."""
 
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -96,6 +209,18 @@ class MeasurementCreateView(APIView):
                 instance=self.request.path,
             )
         return super().handle_exception(exc)
+
+    def get(self, request):
+        errors, queryset = filtered_measurements(request.query_params)
+        if errors:
+            return problem_response(
+                400,
+                'Niepoprawne żądanie',
+                detail='Parametry zapytania są niepoprawne.',
+                instance=request.path,
+                errors=errors,
+            )
+        return Response([measurement_data(item) for item in queryset])
 
     def post(self, request):
         sensor = sensor_from_api_key(request.headers.get('X-API-Key'))
@@ -148,14 +273,27 @@ class MeasurementCreateView(APIView):
                 value=value,
                 timestamp=timestamp,
             )
+            measurement.sensor = locked_sensor
         return Response(
-            {
-                'id': measurement.id,
-                'seriesId': locked_series.id,
-                'sensorId': locked_sensor.id,
-                'value': measurement.value,
-                'timestamp': timestamp,
-            },
+            measurement_data(measurement),
             status=201,
             headers={'Location': f'/api/measurements/{measurement.id}'},
         )
+
+
+class MeasurementDetailView(APIView):
+    """Odczyt jednego wyniku."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, measurement_id):
+        measurement = find_measurement(measurement_id)
+        if measurement is None:
+            return problem_response(
+                404,
+                'Nie znaleziono',
+                detail='Pomiar nie istnieje.',
+                instance=request.path,
+            )
+        return Response(measurement_data(measurement))
