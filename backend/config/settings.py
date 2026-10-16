@@ -15,6 +15,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .runtime import validate_runtime_settings
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -43,8 +45,18 @@ SECRET_KEY = os.environ.get(
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env_bool('DJANGO_DEBUG', default=True)
+validate_runtime_settings(debug=DEBUG, secret_key=SECRET_KEY)
 
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1')
+
+SECURE_CONTENT_TYPE_NOSNIFF = True
+USE_HTTPS = env_bool('DJANGO_USE_HTTPS', default=False)
+if USE_HTTPS:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 
 # Application definition
@@ -169,9 +181,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.AllowAny',
     ],
+    'EXCEPTION_HANDLER': 'config.exceptions.api_exception_handler',
 }
 
 
-# CORS — frontend Angular
+# CORS — frontend Angular. Lista pochodzi z FRONTEND_URL, bez odbijania dowolnego Origin.
 
 CORS_ALLOWED_ORIGINS = env_list('FRONTEND_URL', 'http://localhost:4200')
+CORS_ALLOW_ALL_ORIGINS = False
