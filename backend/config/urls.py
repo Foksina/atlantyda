@@ -26,6 +26,7 @@ admin.site.index_title = 'Serie pomiarowe'
 urlpatterns = [
     path('api/health', health, name='health'),
     path('api/health/', health),
+    path('api/', include('accounts.urls')),
     path('api/', include('series.urls')),
     path('api/', include('sensors.urls')),
     path('api/', include('measurements.urls')),

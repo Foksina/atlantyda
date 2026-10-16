@@ -1,7 +1,12 @@
+import hashlib
+from datetime import timedelta
+
 from django.core import signing
+from django.db import IntegrityError
+from django.utils import timezone
 from rest_framework.authentication import BaseAuthentication
 
-from .models import User
+from .models import RevokedAccessToken, User
 
 ACCESS_TOKEN_SALT = 'atlantyda.access-token'
 ACCESS_TOKEN_MAX_AGE = 60 * 60
@@ -9,6 +14,18 @@ ACCESS_TOKEN_MAX_AGE = 60 * 60
 
 def issue_access_token(user):
     return signing.dumps({'uid': user.pk}, salt=ACCESS_TOKEN_SALT)
+
+
+def _token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def revoke_access_token(token):
+    expires_at = timezone.now() + timedelta(seconds=ACCESS_TOKEN_MAX_AGE)
+    try:
+        RevokedAccessToken.objects.create(token_hash=_token_hash(token), expires_at=expires_at)
+    except IntegrityError:
+        return
 
 
 def user_from_access_token(token):
@@ -21,6 +38,8 @@ def user_from_access_token(token):
     except signing.BadSignature:
         return None
     if not isinstance(payload, dict):
+        return None
+    if RevokedAccessToken.objects.filter(token_hash=_token_hash(token)).exists():
         return None
     user_id = payload.get('uid')
     if user_id is None:
