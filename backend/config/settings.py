@@ -110,13 +110,33 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 
 # Database
-# https://docs.djangoproject.com/en/6.1/ref/settings/#databases
+# PostgreSQL, gdy ustawiono POSTGRES_DB. Bez tej zmiennej zostaje lokalny SQLite.
+
+
+def database_from_env():
+    name = os.environ.get('POSTGRES_DB', '').strip()
+    if not name:
+        return {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    database = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': name,
+        'USER': os.environ.get('POSTGRES_USER', ''),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+        'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
+        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        'OPTIONS': {'connect_timeout': 5},
+    }
+    sslmode = os.environ.get('POSTGRES_SSLMODE', '').strip()
+    if sslmode:
+        database['OPTIONS']['sslmode'] = sslmode
+    return database
+
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': database_from_env(),
 }
 
 

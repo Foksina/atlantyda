@@ -12,11 +12,30 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: atlantyda
+          POSTGRES_USER: atlantyda
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atlantyda -d atlantyda"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DJANGO_SECRET_KEY: ci-only-not-a-secret
       DJANGO_DEBUG: "True"
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
       FRONTEND_URL: http://localhost:4200
+      POSTGRES_DB: atlantyda
+      POSTGRES_USER: atlantyda
+      POSTGRES_PASSWORD: ci-only-not-a-secret
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
     steps:
       - name: Pobranie kodu
         uses: actions/checkout@v7
