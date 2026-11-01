@@ -1,0 +1,36 @@
+# Baza PostgreSQL jest już utworzona w panelu Rendera.
+# Blueprint stawia tylko usługę web i prosi o dane połączenia.
+# Hasło nie trafia do tego pliku.
+
+services:
+  - type: web
+    name: atlantyda-api
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: main
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.14.8"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: "False"
+      - key: DJANGO_USE_HTTPS
+        value: "False"
+      - key: POSTGRES_SSLMODE
+        value: require
+      - key: POSTGRES_DB
+        sync: false
+      - key: POSTGRES_USER
+        sync: false
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_HOST
+        sync: false
+      - key: POSTGRES_PORT
+        sync: false

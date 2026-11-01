@@ -48,15 +48,22 @@ DEBUG = env_bool('DJANGO_DEBUG', default=True)
 validate_runtime_settings(debug=DEBUG, secret_key=SECRET_KEY)
 
 ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1')
+render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '').strip()
+if render_host and render_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(render_host)
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 USE_HTTPS = env_bool('DJANGO_USE_HTTPS', default=False)
 if USE_HTTPS:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r'^api/health$']
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_HSTS_SECONDS = 60 * 60 * 24 * 365
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    if render_host:
+        CSRF_TRUSTED_ORIGINS = [f'https://{render_host}']
 
 
 # Application definition
