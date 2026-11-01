@@ -22,6 +22,14 @@ Aplikacja internetowa służąca do zbierania, walidowania i wizualizacji pomiar
 - `docs/` — dokumentacja projektu oraz kontrakt API
 - `tests/contract/` — testy kontraktowe dostarczone przez prowadzącego
 
+## Wdrożenie
+
+Publiczny adres API: https://atlantyda.onrender.com
+
+Pierwsze wdrożenie: 1 listopada 2026. Aplikacja stoi na darmowym planie Render i jest utrzymywana do 1 grudnia 2026.
+
+Darmowa instancja usypia się po okresie bezczynności - 15 minut. Render podaje: „Your free instance will spin down with inactivity, which can delay requests by 50 seconds or more.” Pierwsze żądanie po uśpieniu może więc zająć około 50 sekund lub dłużej. Kolejne żądania, gdy instancja już działa, odpowiadają od razu. Sprawdzenie, czy usługa wstała: https://atlantyda.onrender.com/api/health
+
 ## Uruchomienie lokalne
 
 Instrukcja instalacji zależności, konfiguracji środowiska i uruchamiania poszczególnych części aplikacji zostanie uzupełniona w trakcie realizacji projektu.
