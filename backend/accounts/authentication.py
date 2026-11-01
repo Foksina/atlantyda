@@ -1,4 +1,5 @@
 import hashlib
+import secrets
 from datetime import timedelta
 
 from django.core import signing
@@ -13,7 +14,10 @@ ACCESS_TOKEN_MAX_AGE = 60 * 60
 
 
 def issue_access_token(user):
-    return signing.dumps({'uid': user.pk}, salt=ACCESS_TOKEN_SALT)
+    return signing.dumps(
+        {'uid': user.pk, 'nonce': secrets.token_hex(16)},
+        salt=ACCESS_TOKEN_SALT,
+    )
 
 
 def _token_hash(token):

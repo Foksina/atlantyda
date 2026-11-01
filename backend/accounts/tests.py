@@ -97,6 +97,7 @@ class AuthApiTests(TestCase):
     def test_logout_invalidates_only_the_presented_token(self):
         first = self.login().json()['accessToken']
         second = self.login().json()['accessToken']
+        self.assertNotEqual(first, second)
         response = self.client.post(
             '/api/auth/logout',
             HTTP_AUTHORIZATION=f'Bearer {first}',
