@@ -1,1 +1,36 @@
-/* You can add global styles to this file, and also import other style files */
+:root {
+  color-scheme: light;
+  --navy: #0b1c33;
+  --active: #1e4e8c;
+  --canvas: #eef3f8;
+  --ink: #132033;
+  --muted: #4d6073;
+  --foam: #f5f9fc;
+  --mist: #c5d4e6;
+  --glow: #9fd4ff;
+  --font-text: 'Segoe UI', system-ui, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--navy);
+  color: var(--ink);
+  font-family: var(--font-text);
+  line-height: 1.45;
+}
+
+:focus-visible {
+  outline: 3px solid var(--active);
+  outline-offset: 3px;
+}

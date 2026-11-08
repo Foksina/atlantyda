@@ -1,6 +1,5 @@
 import { provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
 import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/core';
-import { provideClientHydration } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 
 import { environment } from '../environments/environment';
@@ -12,7 +11,6 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideRouter(routes),
-    provideClientHydration(),
     provideHttpClient(withFetch(), withInterceptors([apiErrorInterceptor])),
     { provide: API_URL, useValue: environment.apiUrl },
     { provide: API_TIMEOUT_MS, useValue: DEFAULT_API_TIMEOUT_MS },

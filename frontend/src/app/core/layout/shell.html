@@ -1,0 +1,107 @@
+<a class="skip" href="#tresc">Przejdź do treści</a>
+
+<div class="frame">
+  <header class="mast">
+    <div class="brand">
+      <a class="title" routerLink="/pomiary">Atlantyda</a>
+      <p class="tagline">Monitoring środowiska podwodnego</p>
+    </div>
+    <p class="who">
+      <span class="who__icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <circle cx="12" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path
+            d="M5.5 19.2c1.4-3 3.7-4.4 6.5-4.4s5.1 1.4 6.5 4.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+        </svg>
+      </span>
+      <span class="who__text">
+        <span class="who__key">Użytkownik</span>
+        <span class="who__val">Niezalogowano</span>
+      </span>
+    </p>
+  </header>
+
+  <nav class="nav" aria-label="Główna">
+    <ul class="nav__list">
+      <li>
+        <a
+          class="nav__link"
+          routerLink="/pomiary"
+          routerLinkActive="is-active"
+          ariaCurrentWhenActive="page"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M4 16l4.5-5 3.5 3.5L20 6"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M4 19h16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          </svg>
+          Pomiary
+        </a>
+      </li>
+      <li>
+        <a
+          class="nav__link"
+          routerLink="/serie"
+          routerLinkActive="is-active"
+          ariaCurrentWhenActive="page"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="8" cy="8" r="2.2" fill="currentColor" />
+            <circle cx="15" cy="12" r="2.2" fill="currentColor" />
+            <circle cx="10" cy="17" r="2.2" fill="currentColor" />
+          </svg>
+          Serie pomiarowe
+        </a>
+      </li>
+      <li>
+        <a
+          class="nav__link"
+          routerLink="/admin"
+          routerLinkActive="is-active"
+          ariaCurrentWhenActive="page"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8" />
+            <path
+              d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M18 6l-1.6 1.6M7.6 16.4 6 18"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          </svg>
+          Panel administratora
+        </a>
+      </li>
+    </ul>
+  </nav>
+
+  <main id="tresc" class="workspace" tabindex="-1">
+    <router-outlet />
+  </main>
+
+  <footer class="colophon">
+    <p>
+      <span class="colophon__name">Atlantyda</span>
+      <span class="colophon__rule" aria-hidden="true"></span>
+      System monitorowania środowiska podwodnej stacji badawczej.
+    </p>
+  </footer>
+</div>
